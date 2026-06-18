@@ -1,36 +1,33 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# FinanzPilot
 
-## Getting Started
+Persönliche Finanzverwaltung mit Next.js 16, Supabase, Tailwind CSS 4 und shadcn/ui.
 
-First, run the development server:
+## Features
+
+- **Authentifizierung** – Registrierung/Login über Supabase Auth (E-Mail + Passwort, E-Mail-Bestätigung)
+- **Einnahmen & Ausgaben** – Transaktionen mit Betrag, Kategorie, Beschreibung und Datum
+- **Eigene Kategorien** – frei anlegbar, mit Farbe; 8 Standard-Kategorien werden bei der Registrierung erstellt
+- **Sparziele mit ETF-Rechner** – Alter, Zielalter und Zielbetrag eingeben; die monatliche Sparrate wird automatisch berechnet, wahlweise mit ETF-Rendite (Sparplan-Formel, nachschüssige Rente)
+- **Monatsarchiv** – jeder Monat bleibt mit Einnahmen/Ausgaben/Saldo dauerhaft abrufbar
+- **Protokoll** – jede Änderung an Transaktionen wird per Datenbank-Trigger im Aktivitätslog festgehalten
+
+## Entwicklung
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev   # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Die Supabase-Zugangsdaten liegen in `.env.local` (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Architektur
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- **Datenbank**: Supabase-Projekt `finance-app` (eu-central-1). Tabellen: `profiles`, `categories`, `transactions`, `savings_goals`, `activity_log` – alle mit Row Level Security (Zugriff nur auf eigene Daten).
+- **Auth-Flow**: `src/proxy.ts` (Next 16: Nachfolger von `middleware.ts`) refresht die Session und schützt alle Routen außer `/`, `/login`, `/register`, `/auth/*`.
+- **Mutationen**: Server Actions in `src/app/(app)/actions.ts`.
+- **Sparraten-Berechnung**: `src/lib/savings.ts`.
+- **Trigger**: `handle_new_user` (Profil), `create_default_categories` (Standard-Kategorien), `log_transaction_change` (Protokoll).
 
-## Learn More
+## Hinweis zur E-Mail-Bestätigung
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Neue Konten müssen per E-Mail bestätigt werden (Supabase-Standard). Der Bestätigungslink führt zurück zur App; der Code-Austausch passiert auf der Startseite bzw. unter `/auth/callback`. Für die Produktion im Supabase-Dashboard unter *Authentication → URL Configuration* die Site-URL und Redirect-URLs der Live-Domain eintragen.
