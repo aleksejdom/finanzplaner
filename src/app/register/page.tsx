@@ -40,7 +40,14 @@ export default function RegisterPage() {
 
     // requireEmailVerification/autoSignIn sind serverseitig aktiv – das Konto
     // wird direkt nutzbar angelegt und die Session sofort gesetzt.
-    const { error } = await signUp.email({ email, password, name })
+    let error: { code?: string; message?: string } | null | undefined
+    try {
+      ;({ error } = await signUp.email({ email, password, name }))
+    } catch (err) {
+      setLoading(false)
+      toast.error(err instanceof Error ? err.message : t("errorRegistration", { reason: "unknown" }))
+      return
+    }
 
     if (error) {
       setLoading(false)

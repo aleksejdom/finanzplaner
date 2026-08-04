@@ -30,10 +30,17 @@ export default function LoginPage() {
     setLoading(true)
     const formData = new FormData(e.currentTarget)
 
-    const { error } = await signIn.email({
-      email: formData.get("email") as string,
-      password: formData.get("password") as string,
-    })
+    let error: { code?: string; message?: string } | null | undefined
+    try {
+      ;({ error } = await signIn.email({
+        email: formData.get("email") as string,
+        password: formData.get("password") as string,
+      }))
+    } catch (err) {
+      setLoading(false)
+      toast.error(err instanceof Error ? err.message : t("errorInvalidCredentials"))
+      return
+    }
 
     if (error) {
       setLoading(false)
