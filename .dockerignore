@@ -3,6 +3,5 @@ node_modules
 .git
 .env*
 !.env.example
-drizzle
 *.tsbuildinfo
 next-env.d.ts
