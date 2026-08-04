@@ -1,9 +1,11 @@
 import { getLocale, getTranslations } from "next-intl/server"
+import { desc, eq } from "drizzle-orm"
 import { PiggyBank, TrendingUp } from "lucide-react"
-import { createClient } from "@/lib/supabase/server"
+import { db } from "@/db"
+import { savingsGoals } from "@/db/schema"
+import { requireUser } from "@/lib/session"
 import { calculateSavingsPlan } from "@/lib/savings"
 import { formatCurrency } from "@/lib/utils"
-import type { SavingsGoal } from "@/lib/types"
 import { deleteGoal } from "@/app/(app)/actions"
 import { GoalDialog } from "@/components/goal-dialog"
 import { DeleteButton } from "@/components/delete-button"
@@ -19,16 +21,16 @@ import { Progress } from "@/components/ui/progress"
 import { Separator } from "@/components/ui/separator"
 
 export default async function GoalsPage() {
-  const supabase = await createClient()
+  const user = await requireUser()
   const [t, locale] = await Promise.all([
     getTranslations("goals"),
     getLocale(),
   ])
-  const { data } = await supabase
-    .from("savings_goals")
-    .select("*")
-    .order("created_at", { ascending: false })
-  const goals = (data ?? []) as SavingsGoal[]
+  const goals = await db
+    .select()
+    .from(savingsGoals)
+    .where(eq(savingsGoals.userId, user.id))
+    .orderBy(desc(savingsGoals.createdAt))
 
   return (
     <div className="grid gap-6">
@@ -57,15 +59,14 @@ export default async function GoalsPage() {
       <div className="grid gap-4 md:grid-cols-2">
         {goals.map((g) => {
           const plan = calculateSavingsPlan({
-            targetAmount: Number(g.target_amount),
-            initialAmount: Number(g.initial_amount),
-            currentAge: g.current_age,
-            targetAge: g.target_age,
-            etfEnabled: g.etf_enabled,
-            etfAnnualReturn: Number(g.etf_annual_return),
+            targetAmount: g.targetAmount,
+            initialAmount: g.initialAmount,
+            currentAge: g.currentAge,
+            targetAge: g.targetAge,
+            etfEnabled: g.etfEnabled,
+            etfAnnualReturn: g.etfAnnualReturn,
           })
-          const progress =
-            (Number(g.initial_amount) / Number(g.target_amount)) * 100
+          const progress = (g.initialAmount / g.targetAmount) * 100
 
           return (
             <Card key={g.id}>
@@ -75,9 +76,9 @@ export default async function GoalsPage() {
                     <CardTitle className="text-base">{g.name}</CardTitle>
                     <CardDescription>
                       {t("goalSummary", {
-                        amount: formatCurrency(Number(g.target_amount), locale),
-                        targetAge: g.target_age,
-                        currentAge: g.current_age,
+                        amount: formatCurrency(g.targetAmount, locale),
+                        targetAge: g.targetAge,
+                        currentAge: g.currentAge,
                       })}
                     </CardDescription>
                   </div>
@@ -89,10 +90,10 @@ export default async function GoalsPage() {
                 </div>
               </CardHeader>
               <CardContent className="grid gap-4">
-                {g.etf_enabled && (
+                {g.etfEnabled && (
                   <Badge variant="secondary" className="justify-self-start gap-1">
                     <TrendingUp className="size-3" />
-                    {t("etfBadge", { rate: Number(g.etf_annual_return) })}
+                    {t("etfBadge", { rate: g.etfAnnualReturn })}
                   </Badge>
                 )}
 
@@ -132,7 +133,7 @@ export default async function GoalsPage() {
                       {t("initialCapital")}
                     </span>
                     <span className="tabular-nums">
-                      {formatCurrency(Number(g.initial_amount), locale)}
+                      {formatCurrency(g.initialAmount, locale)}
                     </span>
                   </div>
                   {plan && (

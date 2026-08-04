@@ -5,9 +5,8 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
-import { createClient } from "@/lib/supabase/client"
+import { signUp } from "@/lib/auth-client"
 import { LogoMark } from "@/components/logo"
-import { registerUser } from "./actions"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -31,6 +30,7 @@ export default function RegisterPage() {
     const formData = new FormData(e.currentTarget)
     const email = (formData.get("email") as string).trim()
     const password = formData.get("password") as string
+    const name = formData.get("name") as string
 
     if (password.length < 6) {
       setLoading(false)
@@ -38,30 +38,21 @@ export default function RegisterPage() {
       return
     }
 
-    // Konto über die Edge Function anlegen (ohne Bestätigungs-E-Mail) …
-    const result = await registerUser({
-      email,
-      password,
-      displayName: formData.get("name") as string,
-    })
-
-    if (result.error) {
-      setLoading(false)
-      toast.error(result.error)
-      return
-    }
-
-    // … und direkt anmelden.
-    const supabase = createClient()
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
+    // requireEmailVerification/autoSignIn sind serverseitig aktiv – das Konto
+    // wird direkt nutzbar angelegt und die Session sofort gesetzt.
+    const { error } = await signUp.email({ email, password, name })
 
     if (error) {
       setLoading(false)
-      toast.error(t("accountCreatedLoginNow"))
-      router.push("/login")
+      toast.error(
+        error.code === "USER_ALREADY_EXISTS"
+          ? t("errorEmailExists")
+          : error.code === "INVALID_EMAIL"
+            ? t("errorInvalidEmail")
+            : error.code === "PASSWORD_TOO_SHORT"
+              ? t("errorPasswordLength")
+              : t("errorRegistration", { reason: error.message ?? "unknown" })
+      )
       return
     }
 

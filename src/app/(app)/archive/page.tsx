@@ -1,11 +1,14 @@
 import Link from "next/link"
 import { getLocale, getTranslations } from "next-intl/server"
+import { eq } from "drizzle-orm"
 import { ArrowRight, ChevronRight } from "lucide-react"
-import { createClient } from "@/lib/supabase/server"
+import { db } from "@/db"
+import { transactions } from "@/db/schema"
+import { requireUser } from "@/lib/session"
 import { formatCurrency, formatMonth } from "@/lib/utils"
 import { YearPicker } from "@/components/year-picker"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Table,
   TableBody,
@@ -39,30 +42,31 @@ export default async function ArchivePage({
   const currentYear = new Date().getFullYear()
   const selectedYear = /^\d{4}$/.test(jahr ?? "") ? Number(jahr) : currentYear
 
-  const supabase = await createClient()
+  const user = await requireUser()
   const [t, tc, locale] = await Promise.all([
     getTranslations("archive"),
     getTranslations("common"),
     getLocale(),
   ])
 
-  const { data } = await supabase
-    .from("transactions")
-    .select("type, amount, date, category_id, categories(name, color)")
+  const data = await db.query.transactions.findMany({
+    where: eq(transactions.userId, user.id),
+    columns: { type: true, amount: true, date: true, categoryId: true },
+    with: { category: { columns: { name: true, color: true } } },
+  })
 
   const byMonth = new Map<string, MonthSummary>()
   const byYearCat = new Map<number, Map<string, CategoryRow>>()
 
-  for (const tx of data ?? []) {
+  for (const tx of data) {
     const dateStr = String(tx.date)
     const monthKey = dateStr.slice(0, 7)
     const year = Number(dateStr.slice(0, 4))
-    const cat = tx.categories as unknown as { name: string; color: string } | null
 
     // Monatsübersicht
     const m = byMonth.get(monthKey) ?? { key: monthKey, income: 0, expenses: 0, count: 0 }
-    if (tx.type === "income") m.income += Number(tx.amount)
-    else m.expenses += Number(tx.amount)
+    if (tx.type === "income") m.income += tx.amount
+    else m.expenses += tx.amount
     m.count++
     byMonth.set(monthKey, m)
 
@@ -70,15 +74,15 @@ export default async function ArchivePage({
     if (tx.type === "expense") {
       if (!byYearCat.has(year)) byYearCat.set(year, new Map())
       const yearMap = byYearCat.get(year)!
-      const catKey = (tx.category_id as string | null) ?? "none"
+      const catKey = tx.categoryId ?? "none"
       const row = yearMap.get(catKey) ?? {
         id: catKey,
-        name: cat?.name ?? tc("noCategory"),
-        color: cat?.color ?? "#94a3b8",
+        name: tx.category?.name ?? tc("noCategory"),
+        color: tx.category?.color ?? "#94a3b8",
         total: 0,
         percent: 0,
       }
-      row.total += Number(tx.amount)
+      row.total += tx.amount
       yearMap.set(catKey, row)
     }
   }

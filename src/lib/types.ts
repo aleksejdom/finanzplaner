@@ -2,43 +2,43 @@ export type TransactionType = "income" | "expense"
 
 export interface Category {
   id: string
-  user_id: string
+  userId: string
   name: string
   type: TransactionType
   color: string
-  created_at: string
+  createdAt: Date
 }
 
 export interface Transaction {
   id: string
-  user_id: string
-  category_id: string | null
+  userId: string
+  categoryId: string | null
   type: TransactionType
   amount: number
   description: string
   date: string
-  created_at: string
-  is_recurring: boolean
-  recurring_source_id: string | null
-  categories?: Pick<Category, "name" | "color"> | null
+  createdAt: Date
+  isRecurring: boolean
+  recurringSourceId: string | null
+  category?: Pick<Category, "name" | "color"> | null
 }
 
 export interface SavingsGoal {
   id: string
-  user_id: string
+  userId: string
   name: string
-  current_age: number
-  target_age: number
-  target_amount: number
-  initial_amount: number
-  etf_enabled: boolean
-  etf_annual_return: number
-  created_at: string
+  currentAge: number
+  targetAge: number
+  targetAmount: number
+  initialAmount: number
+  etfEnabled: boolean
+  etfAnnualReturn: number
+  createdAt: Date
 }
 
 export interface ActivityLogEntry {
   id: number
-  user_id: string
+  userId: string
   action: "created" | "updated" | "deleted"
   entity: string
   details: {
@@ -50,27 +50,27 @@ export interface ActivityLogEntry {
     date?: string
     previous?: { amount?: number; description?: string; date?: string }
   }
-  created_at: string
+  createdAt: Date
 }
 
 export type SavingsDirection = "deposit" | "withdrawal"
 
 export interface SavingsAccount {
   id: string
-  user_id: string
+  userId: string
   name: string
   color: string
-  created_at: string
+  createdAt: Date
 }
 
 export interface SavingsEntry {
   id: string
-  user_id: string
-  account_id: string | null
+  userId: string
+  accountId: string | null
   direction: SavingsDirection
   amount: number
   description: string
   date: string
-  created_at: string
-  savings_accounts?: Pick<SavingsAccount, "name" | "color"> | null
+  createdAt: Date
+  account?: Pick<SavingsAccount, "name" | "color"> | null
 }

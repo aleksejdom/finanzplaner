@@ -1,5 +1,6 @@
 import Link from "next/link"
 import { getLocale, getTranslations } from "next-intl/server"
+import { and, asc, desc, eq, gte, lte } from "drizzle-orm"
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -7,7 +8,10 @@ import {
   ArrowRight,
   PiggyBank,
 } from "lucide-react"
-import { createClient } from "@/lib/supabase/server"
+import { db } from "@/db"
+import { categories, savingsAccounts, transactions } from "@/db/schema"
+import { requireUser } from "@/lib/session"
+import { processRecurringTransactions } from "@/lib/recurring"
 import { formatCurrency, formatDate, formatMonth } from "@/lib/utils"
 import type { Category, SavingsAccount, SavingsEntry, Transaction } from "@/lib/types"
 import { TransactionDialog } from "@/components/transaction-dialog"
@@ -25,8 +29,8 @@ import {
 } from "@/components/ui/card"
 
 export default async function DashboardPage() {
-  const supabase = await createClient()
-  await supabase.rpc("process_recurring_transactions")
+  const user = await requireUser()
+  await processRecurringTransactions(user.id)
 
   const [t, tc, locale] = await Promise.all([
     getTranslations("dashboard"),
@@ -40,27 +44,27 @@ export default async function DashboardPage() {
   const firstDay = `${year}-${String(month).padStart(2, "0")}-01`
   const lastDay = new Date(year, month, 0).toISOString().slice(0, 10)
 
-  const [
-    { data: transactions },
-    { data: categories },
-    { data: savingsAccountsData },
-  ] = await Promise.all([
-    supabase
-      .from("transactions")
-      .select("*, categories(name, color)")
-      .gte("date", firstDay)
-      .lte("date", lastDay)
-      .order("date", { ascending: false })
-      .order("created_at", { ascending: false }),
-    supabase.from("categories").select("*").order("name"),
-    supabase
-      .from("savings_accounts")
-      .select("id, name, color, savings_entries(direction, amount)")
-      .order("created_at"),
+  const [txs, cats, savingsAccountsData] = await Promise.all([
+    db.query.transactions.findMany({
+      where: and(
+        eq(transactions.userId, user.id),
+        gte(transactions.date, firstDay),
+        lte(transactions.date, lastDay)
+      ),
+      with: { category: { columns: { name: true, color: true } } },
+      orderBy: [desc(transactions.date), desc(transactions.createdAt)],
+    }),
+    db
+      .select()
+      .from(categories)
+      .where(eq(categories.userId, user.id))
+      .orderBy(asc(categories.name)),
+    db.query.savingsAccounts.findMany({
+      where: eq(savingsAccounts.userId, user.id),
+      with: { entries: { columns: { direction: true, amount: true } } },
+      orderBy: [asc(savingsAccounts.createdAt)],
+    }),
   ])
-
-  const txs = (transactions ?? []) as Transaction[]
-  const cats = (categories ?? []) as Category[]
 
   const income = txs
     .filter((tx) => tx.type === "income")
@@ -73,12 +77,9 @@ export default async function DashboardPage() {
   type AccountWithBalance = Pick<SavingsAccount, "id" | "name" | "color"> & {
     balance: number
   }
-  const savingsAccounts: AccountWithBalance[] = (savingsAccountsData ?? []).map(
+  const savingsAccountsList: AccountWithBalance[] = savingsAccountsData.map(
     (acc) => {
-      const entries = (acc.savings_entries ?? []) as Pick<
-        SavingsEntry,
-        "direction" | "amount"
-      >[]
+      const entries = acc.entries as Pick<SavingsEntry, "direction" | "amount">[]
       const bal = entries.reduce(
         (s, e) =>
           e.direction === "deposit" ? s + Number(e.amount) : s - Number(e.amount),
@@ -87,19 +88,19 @@ export default async function DashboardPage() {
       return { id: acc.id, name: acc.name, color: acc.color, balance: bal }
     }
   )
-  const savingsBalance = savingsAccounts.reduce((s, a) => s + a.balance, 0)
+  const savingsBalance = savingsAccountsList.reduce((s, a) => s + a.balance, 0)
 
   // Ausgaben nach Kategorie inkl. Einzelbuchungen (aufklappbar)
   const byCategory = new Map<
     string,
     { name: string; color: string; sum: number; items: Transaction[] }
   >()
-  for (const tx of txs) {
+  for (const tx of txs as unknown as Transaction[]) {
     if (tx.type !== "expense") continue
-    const key = tx.category_id ?? "none"
+    const key = tx.categoryId ?? "none"
     const entry = byCategory.get(key) ?? {
-      name: tx.categories?.name ?? tc("noCategory"),
-      color: tx.categories?.color ?? "#94a3b8",
+      name: tx.category?.name ?? tc("noCategory"),
+      color: tx.category?.color ?? "#94a3b8",
       sum: 0,
       items: [],
     }
@@ -169,7 +170,7 @@ export default async function DashboardPage() {
             {t("subtitle", { month: formatMonth(year, month, locale) })}
           </p>
         </div>
-        <TransactionDialog categories={cats} />
+        <TransactionDialog categories={cats as Category[]} />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -227,15 +228,15 @@ export default async function DashboardPage() {
                 <div className="flex min-w-0 items-center gap-3">
                   <span
                     className="size-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: tx.categories?.color ?? "#94a3b8" }}
+                    style={{ backgroundColor: tx.category?.color ?? "#94a3b8" }}
                   />
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">
-                      {tx.description || tx.categories?.name || tc("transaction")}
+                      {tx.description || tx.category?.name || tc("transaction")}
                     </p>
                     <p className="text-xs text-muted-foreground">
                       {formatDate(tx.date, locale)}
-                      {tx.categories?.name ? ` · ${tx.categories.name}` : ""}
+                      {tx.category?.name ? ` · ${tx.category.name}` : ""}
                     </p>
                   </div>
                 </div>
@@ -278,7 +279,7 @@ export default async function DashboardPage() {
       </div>
 
       {/* ── Sparkonten ────────────────────────────────── */}
-      {savingsAccounts.length > 0 && (
+      {savingsAccountsList.length > 0 && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-base">{t("savingsAccounts")}</CardTitle>
@@ -289,7 +290,7 @@ export default async function DashboardPage() {
             </Button>
           </CardHeader>
           <CardContent className="grid gap-3">
-            {savingsAccounts.map((acc) => (
+            {savingsAccountsList.map((acc) => (
               <Link
                 key={acc.id}
                 href={`/savings?konto=${acc.id}`}
@@ -312,7 +313,7 @@ export default async function DashboardPage() {
                 </span>
               </Link>
             ))}
-            {savingsAccounts.length > 1 && (
+            {savingsAccountsList.length > 1 && (
               <div className="flex items-center justify-between border-t pt-2 text-sm">
                 <span className="text-muted-foreground">
                   {t("savingsTotal")}

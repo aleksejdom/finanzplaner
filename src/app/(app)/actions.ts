@@ -2,122 +2,228 @@
 
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
+import { headers } from "next/headers"
+import { and, eq } from "drizzle-orm"
 import { getTranslations } from "next-intl/server"
-import { createClient } from "@/lib/supabase/server"
+import { db } from "@/db"
+import {
+  categories,
+  savingsAccounts,
+  savingsEntries,
+  savingsGoals,
+  transactions,
+} from "@/db/schema"
+import { logActivity } from "@/lib/activity-log"
+import { getSession } from "@/lib/session"
+import { auth } from "@/lib/auth"
+
+type ActionResult = { error?: string }
 
 async function getUserOrThrow() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect("/login")
-  return { supabase, user }
+  const session = await getSession()
+  if (!session) redirect("/login")
+  return { userId: session.user.id }
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: string }).code === "23505"
+  )
 }
 
 export async function signOut() {
-  const supabase = await createClient()
-  await supabase.auth.signOut()
+  await auth.api.signOut({ headers: await headers() })
   redirect("/login")
 }
 
 // ---------- Transaktionen ----------
 
-export async function createTransaction(formData: FormData) {
-  const { supabase, user } = await getUserOrThrow()
+export async function createTransaction(formData: FormData): Promise<ActionResult> {
+  const { userId } = await getUserOrThrow()
 
-  const { error } = await supabase.from("transactions").insert({
-    user_id: user.id,
-    type: formData.get("type") as string,
-    amount: Number(formData.get("amount")),
-    category_id: (formData.get("category_id") as string) || null,
-    description: (formData.get("description") as string) ?? "",
-    date: formData.get("date") as string,
-    is_recurring: formData.get("is_recurring") === "on",
-  })
+  const amount = Number(formData.get("amount"))
+  const type = formData.get("type") as "income" | "expense"
+  const description = (formData.get("description") as string) ?? ""
+  const date = formData.get("date") as string
+  const categoryId = (formData.get("category_id") as string) || null
 
-  if (error) return { error: error.message }
-  revalidatePath("/", "layout")
-  return {}
-}
+  try {
+    const [created] = await db
+      .insert(transactions)
+      .values({
+        userId,
+        type,
+        amount,
+        categoryId,
+        description,
+        date,
+        isRecurring: formData.get("is_recurring") === "on",
+      })
+      .returning()
 
-export async function updateTransaction(id: string, formData: FormData) {
-  const { supabase } = await getUserOrThrow()
-
-  const { error } = await supabase
-    .from("transactions")
-    .update({
-      type: formData.get("type") as string,
-      amount: Number(formData.get("amount")),
-      category_id: (formData.get("category_id") as string) || null,
-      description: (formData.get("description") as string) ?? "",
-      date: formData.get("date") as string,
-      is_recurring: formData.get("is_recurring") === "on",
+    await logActivity(userId, "created", "transaction", {
+      id: created.id,
+      type,
+      amount,
+      description,
+      date,
     })
-    .eq("id", id)
+  } catch (error) {
+    return { error: (error as Error).message }
+  }
 
-  if (error) return { error: error.message }
   revalidatePath("/", "layout")
   return {}
 }
 
-export async function deleteTransaction(id: string) {
-  const { supabase } = await getUserOrThrow()
-  const { error } = await supabase.from("transactions").delete().eq("id", id)
-  if (error) return { error: error.message }
+export async function updateTransaction(
+  id: string,
+  formData: FormData
+): Promise<ActionResult> {
+  const { userId } = await getUserOrThrow()
+
+  const amount = Number(formData.get("amount"))
+  const type = formData.get("type") as "income" | "expense"
+  const description = (formData.get("description") as string) ?? ""
+  const date = formData.get("date") as string
+  const categoryId = (formData.get("category_id") as string) || null
+
+  try {
+    const [previous] = await db
+      .select()
+      .from(transactions)
+      .where(and(eq(transactions.id, id), eq(transactions.userId, userId)))
+
+    await db
+      .update(transactions)
+      .set({
+        type,
+        amount,
+        categoryId,
+        description,
+        date,
+        isRecurring: formData.get("is_recurring") === "on",
+      })
+      .where(and(eq(transactions.id, id), eq(transactions.userId, userId)))
+
+    await logActivity(userId, "updated", "transaction", {
+      id,
+      type,
+      amount,
+      description,
+      date,
+      previous: previous
+        ? {
+            amount: previous.amount,
+            description: previous.description,
+            date: previous.date,
+          }
+        : undefined,
+    })
+  } catch (error) {
+    return { error: (error as Error).message }
+  }
+
+  revalidatePath("/", "layout")
+  return {}
+}
+
+export async function deleteTransaction(id: string): Promise<ActionResult> {
+  const { userId } = await getUserOrThrow()
+
+  try {
+    const [previous] = await db
+      .select()
+      .from(transactions)
+      .where(and(eq(transactions.id, id), eq(transactions.userId, userId)))
+
+    await db
+      .delete(transactions)
+      .where(and(eq(transactions.id, id), eq(transactions.userId, userId)))
+
+    if (previous) {
+      await logActivity(userId, "deleted", "transaction", {
+        id,
+        type: previous.type,
+        amount: previous.amount,
+        description: previous.description,
+        date: previous.date,
+      })
+    }
+  } catch (error) {
+    return { error: (error as Error).message }
+  }
+
   revalidatePath("/", "layout")
   return {}
 }
 
 // ---------- Kategorien ----------
 
-export async function createCategory(formData: FormData) {
-  const { supabase, user } = await getUserOrThrow()
+export async function createCategory(formData: FormData): Promise<ActionResult> {
+  const { userId } = await getUserOrThrow()
 
-  const { error } = await supabase.from("categories").insert({
-    user_id: user.id,
-    name: (formData.get("name") as string).trim(),
-    type: formData.get("type") as string,
-    color: formData.get("color") as string,
-  })
-
-  if (error) {
-    const t = await getTranslations("actions")
-    return {
-      error: error.code === "23505" ? t("categoryExists") : error.message,
-    }
-  }
-  revalidatePath("/", "layout")
-  return {}
-}
-
-export async function updateCategory(id: string, formData: FormData) {
-  const { supabase } = await getUserOrThrow()
-
-  const { error } = await supabase
-    .from("categories")
-    .update({
+  try {
+    await db.insert(categories).values({
+      userId,
       name: (formData.get("name") as string).trim(),
+      type: formData.get("type") as "income" | "expense",
       color: formData.get("color") as string,
     })
-    .eq("id", id)
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      const t = await getTranslations("actions")
+      return { error: t("categoryExists") }
+    }
+    return { error: (error as Error).message }
+  }
 
-  if (error) return { error: error.message }
   revalidatePath("/", "layout")
   return {}
 }
 
-export async function deleteCategory(id: string) {
-  const { supabase } = await getUserOrThrow()
-  const { error } = await supabase.from("categories").delete().eq("id", id)
-  if (error) return { error: error.message }
+export async function updateCategory(
+  id: string,
+  formData: FormData
+): Promise<ActionResult> {
+  const { userId } = await getUserOrThrow()
+
+  try {
+    await db
+      .update(categories)
+      .set({
+        name: (formData.get("name") as string).trim(),
+        color: formData.get("color") as string,
+      })
+      .where(and(eq(categories.id, id), eq(categories.userId, userId)))
+  } catch (error) {
+    return { error: (error as Error).message }
+  }
+
+  revalidatePath("/", "layout")
+  return {}
+}
+
+export async function deleteCategory(id: string): Promise<ActionResult> {
+  const { userId } = await getUserOrThrow()
+  try {
+    await db
+      .delete(categories)
+      .where(and(eq(categories.id, id), eq(categories.userId, userId)))
+  } catch (error) {
+    return { error: (error as Error).message }
+  }
   revalidatePath("/", "layout")
   return {}
 }
 
 // ---------- Sparziele ----------
 
-export async function createGoal(formData: FormData) {
-  const { supabase, user } = await getUserOrThrow()
+export async function createGoal(formData: FormData): Promise<ActionResult> {
+  const { userId } = await getUserOrThrow()
 
   const currentAge = Number(formData.get("current_age"))
   const targetAge = Number(formData.get("target_age"))
@@ -126,104 +232,204 @@ export async function createGoal(formData: FormData) {
     return { error: t("targetAgeError") }
   }
 
-  const { error } = await supabase.from("savings_goals").insert({
-    user_id: user.id,
-    name: (formData.get("name") as string).trim(),
-    current_age: currentAge,
-    target_age: targetAge,
-    target_amount: Number(formData.get("target_amount")),
-    initial_amount: Number(formData.get("initial_amount") || 0),
-    etf_enabled: formData.get("etf_enabled") === "on",
-    etf_annual_return: Number(formData.get("etf_annual_return") || 7),
-  })
+  try {
+    await db.insert(savingsGoals).values({
+      userId,
+      name: (formData.get("name") as string).trim(),
+      currentAge,
+      targetAge,
+      targetAmount: Number(formData.get("target_amount")),
+      initialAmount: Number(formData.get("initial_amount") || 0),
+      etfEnabled: formData.get("etf_enabled") === "on",
+      etfAnnualReturn: Number(formData.get("etf_annual_return") || 7),
+    })
+  } catch (error) {
+    return { error: (error as Error).message }
+  }
 
-  if (error) return { error: error.message }
   revalidatePath("/", "layout")
   return {}
 }
 
-export async function deleteGoal(id: string) {
-  const { supabase } = await getUserOrThrow()
-  const { error } = await supabase.from("savings_goals").delete().eq("id", id)
-  if (error) return { error: error.message }
+export async function deleteGoal(id: string): Promise<ActionResult> {
+  const { userId } = await getUserOrThrow()
+  try {
+    await db
+      .delete(savingsGoals)
+      .where(and(eq(savingsGoals.id, id), eq(savingsGoals.userId, userId)))
+  } catch (error) {
+    return { error: (error as Error).message }
+  }
   revalidatePath("/", "layout")
   return {}
 }
 
 // ---------- Sparkonto ----------
 
-export async function createSavingsAccount(formData: FormData) {
-  const { supabase, user } = await getUserOrThrow()
-  const { error } = await supabase.from("savings_accounts").insert({
-    user_id: user.id,
-    name: (formData.get("name") as string).trim(),
-    color: formData.get("color") as string,
-  })
-  if (error) return { error: error.message }
-  revalidatePath("/", "layout")
-  return {}
-}
-
-export async function updateSavingsAccount(id: string, formData: FormData) {
-  const { supabase } = await getUserOrThrow()
-  const { error } = await supabase
-    .from("savings_accounts")
-    .update({
+export async function createSavingsAccount(
+  formData: FormData
+): Promise<ActionResult> {
+  const { userId } = await getUserOrThrow()
+  try {
+    await db.insert(savingsAccounts).values({
+      userId,
       name: (formData.get("name") as string).trim(),
       color: formData.get("color") as string,
     })
-    .eq("id", id)
-  if (error) return { error: error.message }
+  } catch (error) {
+    return { error: (error as Error).message }
+  }
   revalidatePath("/", "layout")
   return {}
 }
 
-export async function deleteSavingsAccount(id: string) {
-  const { supabase } = await getUserOrThrow()
-  const { error } = await supabase.from("savings_accounts").delete().eq("id", id)
-  if (error) return { error: error.message }
+export async function updateSavingsAccount(
+  id: string,
+  formData: FormData
+): Promise<ActionResult> {
+  const { userId } = await getUserOrThrow()
+  try {
+    await db
+      .update(savingsAccounts)
+      .set({
+        name: (formData.get("name") as string).trim(),
+        color: formData.get("color") as string,
+      })
+      .where(and(eq(savingsAccounts.id, id), eq(savingsAccounts.userId, userId)))
+  } catch (error) {
+    return { error: (error as Error).message }
+  }
   revalidatePath("/", "layout")
   return {}
 }
 
-export async function createSavingsEntry(formData: FormData) {
-  const { supabase, user } = await getUserOrThrow()
-
-  const { error } = await supabase.from("savings_entries").insert({
-    user_id: user.id,
-    account_id: (formData.get("account_id") as string) || null,
-    direction: formData.get("direction") as string,
-    amount: Number(formData.get("amount")),
-    description: (formData.get("description") as string) ?? "",
-    date: formData.get("date") as string,
-  })
-
-  if (error) return { error: error.message }
+export async function deleteSavingsAccount(id: string): Promise<ActionResult> {
+  const { userId } = await getUserOrThrow()
+  try {
+    await db
+      .delete(savingsAccounts)
+      .where(and(eq(savingsAccounts.id, id), eq(savingsAccounts.userId, userId)))
+  } catch (error) {
+    return { error: (error as Error).message }
+  }
   revalidatePath("/", "layout")
   return {}
 }
 
-export async function updateSavingsEntry(id: string, formData: FormData) {
-  const { supabase } = await getUserOrThrow()
-  const { error } = await supabase
-    .from("savings_entries")
-    .update({
-      account_id: (formData.get("account_id") as string) || null,
-      direction: formData.get("direction") as string,
-      amount: Number(formData.get("amount")),
-      description: (formData.get("description") as string) ?? "",
-      date: formData.get("date") as string,
+export async function createSavingsEntry(
+  formData: FormData
+): Promise<ActionResult> {
+  const { userId } = await getUserOrThrow()
+
+  const direction = formData.get("direction") as "deposit" | "withdrawal"
+  const amount = Number(formData.get("amount"))
+  const description = (formData.get("description") as string) ?? ""
+  const date = formData.get("date") as string
+
+  try {
+    const [created] = await db
+      .insert(savingsEntries)
+      .values({
+        userId,
+        accountId: (formData.get("account_id") as string) || null,
+        direction,
+        amount,
+        description,
+        date,
+      })
+      .returning()
+
+    await logActivity(userId, "created", "savings", {
+      id: created.id,
+      direction,
+      amount,
+      description,
+      date,
     })
-    .eq("id", id)
-  if (error) return { error: error.message }
+  } catch (error) {
+    return { error: (error as Error).message }
+  }
+
   revalidatePath("/", "layout")
   return {}
 }
 
-export async function deleteSavingsEntry(id: string) {
-  const { supabase } = await getUserOrThrow()
-  const { error } = await supabase.from("savings_entries").delete().eq("id", id)
-  if (error) return { error: error.message }
+export async function updateSavingsEntry(
+  id: string,
+  formData: FormData
+): Promise<ActionResult> {
+  const { userId } = await getUserOrThrow()
+
+  const direction = formData.get("direction") as "deposit" | "withdrawal"
+  const amount = Number(formData.get("amount"))
+  const description = (formData.get("description") as string) ?? ""
+  const date = formData.get("date") as string
+
+  try {
+    const [previous] = await db
+      .select()
+      .from(savingsEntries)
+      .where(and(eq(savingsEntries.id, id), eq(savingsEntries.userId, userId)))
+
+    await db
+      .update(savingsEntries)
+      .set({
+        accountId: (formData.get("account_id") as string) || null,
+        direction,
+        amount,
+        description,
+        date,
+      })
+      .where(and(eq(savingsEntries.id, id), eq(savingsEntries.userId, userId)))
+
+    await logActivity(userId, "updated", "savings", {
+      id,
+      direction,
+      amount,
+      description,
+      date,
+      previous: previous
+        ? {
+            amount: previous.amount,
+            description: previous.description,
+            date: previous.date,
+          }
+        : undefined,
+    })
+  } catch (error) {
+    return { error: (error as Error).message }
+  }
+
+  revalidatePath("/", "layout")
+  return {}
+}
+
+export async function deleteSavingsEntry(id: string): Promise<ActionResult> {
+  const { userId } = await getUserOrThrow()
+
+  try {
+    const [previous] = await db
+      .select()
+      .from(savingsEntries)
+      .where(and(eq(savingsEntries.id, id), eq(savingsEntries.userId, userId)))
+
+    await db
+      .delete(savingsEntries)
+      .where(and(eq(savingsEntries.id, id), eq(savingsEntries.userId, userId)))
+
+    if (previous) {
+      await logActivity(userId, "deleted", "savings", {
+        id,
+        direction: previous.direction,
+        amount: previous.amount,
+        description: previous.description,
+        date: previous.date,
+      })
+    }
+  } catch (error) {
+    return { error: (error as Error).message }
+  }
+
   revalidatePath("/", "layout")
   return {}
 }

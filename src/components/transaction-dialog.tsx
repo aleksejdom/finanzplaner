@@ -35,7 +35,7 @@ export function TransactionDialog({
   transaction?: Transaction
 }) {
   const isEdit = !!transaction
-  const isCopy = !!transaction?.recurring_source_id
+  const isCopy = !!transaction?.recurringSourceId
   const t = useTranslations("transactionDialog")
   const tc = useTranslations("common")
   const [open, setOpen] = useState(false)
@@ -43,7 +43,7 @@ export function TransactionDialog({
     transaction?.type ?? "expense"
   )
   const [isRecurring, setIsRecurring] = useState(
-    transaction?.is_recurring ?? false
+    transaction?.isRecurring ?? false
   )
   const [pending, startTransition] = useTransition()
 
@@ -121,7 +121,7 @@ export function TransactionDialog({
               key={type}
               defaultValue={
                 transaction?.type === type
-                  ? (transaction?.category_id ?? undefined)
+                  ? (transaction?.categoryId ?? undefined)
                   : undefined
               }
             >

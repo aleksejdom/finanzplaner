@@ -30,16 +30,13 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files – enthalten Datenbank-Zugangsdaten und Secrets, nie committen
 .env*
-# Produktions-Env enthält nur öffentliche Keys (Supabase-URL, Publishable/Anon-Key)
-!.env.production
+!.env.example
 
-# vercel
+# vercel (nicht mehr genutzt, Ordner ggf. lokal noch vorhanden)
 .vercel
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-.vercel

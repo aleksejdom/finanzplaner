@@ -1,5 +1,8 @@
 import { getTranslations } from "next-intl/server"
-import { createClient } from "@/lib/supabase/server"
+import { asc, eq } from "drizzle-orm"
+import { db } from "@/db"
+import { categories } from "@/db/schema"
+import { requireUser } from "@/lib/session"
 import type { Category } from "@/lib/types"
 import { deleteCategory } from "@/app/(app)/actions"
 import { CategoryDialog } from "@/components/category-dialog"
@@ -57,13 +60,16 @@ function CategoryList({
 }
 
 export default async function CategoriesPage() {
-  const supabase = await createClient()
+  const user = await requireUser()
   const [t, tc] = await Promise.all([
     getTranslations("categories"),
     getTranslations("common"),
   ])
-  const { data } = await supabase.from("categories").select("*").order("name")
-  const categories = (data ?? []) as Category[]
+  const items = await db
+    .select()
+    .from(categories)
+    .where(eq(categories.userId, user.id))
+    .orderBy(asc(categories.name))
 
   const listProps = {
     emptyText: t("empty"),
@@ -92,7 +98,7 @@ export default async function CategoriesPage() {
           </CardHeader>
           <CardContent>
             <CategoryList
-              items={categories.filter((c) => c.type === "income")}
+              items={items.filter((c) => c.type === "income")}
               {...listProps}
             />
           </CardContent>
@@ -105,7 +111,7 @@ export default async function CategoriesPage() {
           </CardHeader>
           <CardContent>
             <CategoryList
-              items={categories.filter((c) => c.type === "expense")}
+              items={items.filter((c) => c.type === "expense")}
               {...listProps}
             />
           </CardContent>

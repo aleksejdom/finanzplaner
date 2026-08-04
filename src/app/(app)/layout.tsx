@@ -1,10 +1,9 @@
-import { redirect } from "next/navigation"
-import { createClient } from "@/lib/supabase/server"
 import { Brand } from "@/components/logo"
 import { Nav } from "@/components/nav"
 import { LogoutButton } from "@/components/logout-button"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { LocaleSwitcher } from "@/components/locale-switcher"
+import { requireUser } from "@/lib/session"
 import {
   Avatar,
   AvatarFallback,
@@ -15,20 +14,9 @@ export default async function AppLayout({
 }: {
   children: React.ReactNode
 }) {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  const user = await requireUser()
 
-  if (!user) redirect("/login")
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("display_name")
-    .eq("id", user.id)
-    .single()
-
-  const name = profile?.display_name ?? user.email ?? "Konto"
+  const name = user.name || user.email || "Konto"
   const initials = name
     .split(" ")
     .map((p: string) => p[0])

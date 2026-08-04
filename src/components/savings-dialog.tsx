@@ -44,7 +44,7 @@ export function SavingsDialog({
     entry?.direction ?? "deposit"
   )
   const [selectedAccount, setSelectedAccount] = useState(
-    entry?.account_id ?? accountId ?? accounts[0]?.id ?? ""
+    entry?.accountId ?? accountId ?? accounts[0]?.id ?? ""
   )
   const [pending, startTransition] = useTransition()
 

@@ -1,5 +1,8 @@
 import { getLocale, getTranslations } from "next-intl/server"
-import { createClient } from "@/lib/supabase/server"
+import { desc, eq } from "drizzle-orm"
+import { db } from "@/db"
+import { activityLog } from "@/db/schema"
+import { requireUser } from "@/lib/session"
 import { formatCurrency, formatDate, formatTimestamp } from "@/lib/utils"
 import type { ActivityLogEntry } from "@/lib/types"
 import { Badge } from "@/components/ui/badge"
@@ -20,19 +23,20 @@ const ACTION_VARIANTS: Record<string, "default" | "secondary" | "destructive"> =
 }
 
 export default async function ActivityPage() {
-  const supabase = await createClient()
+  const user = await requireUser()
   const [t, tc, locale] = await Promise.all([
     getTranslations("activity"),
     getTranslations("common"),
     getLocale(),
   ])
-  const { data } = await supabase
-    .from("activity_log")
-    .select("*")
-    .order("created_at", { ascending: false })
+  const rows = await db
+    .select()
+    .from(activityLog)
+    .where(eq(activityLog.userId, user.id))
+    .orderBy(desc(activityLog.createdAt))
     .limit(200)
 
-  const entries = (data ?? []) as ActivityLogEntry[]
+  const entries = rows as unknown as ActivityLogEntry[]
 
   const actionLabel = (action: string) =>
     action === "created" || action === "updated" || action === "deleted"
@@ -93,7 +97,7 @@ export default async function ActivityPage() {
                       : ""}
                   </p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    {formatTimestamp(e.created_at, locale)}
+                    {formatTimestamp(e.createdAt, locale)}
                   </p>
                 </div>
               </div>
@@ -119,7 +123,7 @@ export default async function ActivityPage() {
                 {entries.map((e) => (
                   <TableRow key={e.id}>
                     <TableCell className="whitespace-nowrap text-muted-foreground">
-                      {formatTimestamp(e.created_at, locale)}
+                      {formatTimestamp(e.createdAt, locale)}
                     </TableCell>
                     <TableCell>
                       <Badge variant={ACTION_VARIANTS[e.action] ?? "secondary"}>

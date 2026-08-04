@@ -1,13 +1,15 @@
 import { getLocale, getTranslations } from "next-intl/server"
+import { asc, desc, eq } from "drizzle-orm"
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
   PiggyBank,
   Wallet,
 } from "lucide-react"
-import { createClient } from "@/lib/supabase/server"
+import { db } from "@/db"
+import { savingsAccounts, savingsEntries } from "@/db/schema"
+import { requireUser } from "@/lib/session"
 import { formatCurrency, formatDate, formatMonth } from "@/lib/utils"
-import type { SavingsAccount, SavingsEntry } from "@/lib/types"
 import { deleteSavingsAccount, deleteSavingsEntry } from "@/app/(app)/actions"
 import { AccountDialog } from "@/components/account-dialog"
 import { AccountTabs } from "@/components/account-tabs"
@@ -46,28 +48,29 @@ export default async function SavingsPage({
     : currentYear
   const selectedAccountId = konto ?? null
 
-  const supabase = await createClient()
+  const user = await requireUser()
   const [t, tc, locale] = await Promise.all([
     getTranslations("savings"),
     getTranslations("common"),
     getLocale(),
   ])
 
-  const [{ data: accountsData }, { data: entriesData }] = await Promise.all([
-    supabase.from("savings_accounts").select("*").order("created_at"),
-    supabase
-      .from("savings_entries")
-      .select("*, savings_accounts(name, color)")
-      .order("date", { ascending: false })
-      .order("created_at", { ascending: false }),
+  const [accounts, allEntries] = await Promise.all([
+    db
+      .select()
+      .from(savingsAccounts)
+      .where(eq(savingsAccounts.userId, user.id))
+      .orderBy(asc(savingsAccounts.createdAt)),
+    db.query.savingsEntries.findMany({
+      where: eq(savingsEntries.userId, user.id),
+      with: { account: { columns: { name: true, color: true } } },
+      orderBy: [desc(savingsEntries.date), desc(savingsEntries.createdAt)],
+    }),
   ])
-
-  const accounts = (accountsData ?? []) as SavingsAccount[]
-  const allEntries = (entriesData ?? []) as SavingsEntry[]
 
   // Filter by selected account
   const accountEntries = selectedAccountId
-    ? allEntries.filter((e) => e.account_id === selectedAccountId)
+    ? allEntries.filter((e) => e.accountId === selectedAccountId)
     : allEntries
 
   const selectedAccount = selectedAccountId
@@ -76,25 +79,22 @@ export default async function SavingsPage({
 
   // All-time balance for selected scope
   const allTimeBalance = accountEntries.reduce(
-    (s, e) =>
-      e.direction === "deposit" ? s + Number(e.amount) : s - Number(e.amount),
+    (s, e) => (e.direction === "deposit" ? s + e.amount : s - e.amount),
     0
   )
 
   // Period entries
-  const periodPrefix = isYearMode
-    ? String(selectedYear)
-    : selectedMonth
+  const periodPrefix = isYearMode ? String(selectedYear) : selectedMonth
   const periodEntries = accountEntries.filter((e) =>
     String(e.date).startsWith(periodPrefix)
   )
 
   const periodDeposits = periodEntries
     .filter((e) => e.direction === "deposit")
-    .reduce((s, e) => s + Number(e.amount), 0)
+    .reduce((s, e) => s + e.amount, 0)
   const periodWithdrawals = periodEntries
     .filter((e) => e.direction === "withdrawal")
-    .reduce((s, e) => s + Number(e.amount), 0)
+    .reduce((s, e) => s + e.amount, 0)
 
   // Available periods for the picker
   const monthSet = new Set<string>([currentMonthKey()])
@@ -120,8 +120,7 @@ export default async function SavingsPage({
     let running = accountEntries
       .filter((e) => Number(String(e.date).slice(0, 4)) < selectedYear)
       .reduce(
-        (s, e) =>
-          e.direction === "deposit" ? s + Number(e.amount) : s - Number(e.amount),
+        (s, e) => (e.direction === "deposit" ? s + e.amount : s - e.amount),
         0
       )
 
@@ -129,8 +128,8 @@ export default async function SavingsPage({
     for (const e of periodEntries) {
       const m = String(e.date).slice(0, 7)
       const cur = byMonth.get(m) ?? { deposits: 0, withdrawals: 0 }
-      if (e.direction === "deposit") cur.deposits += Number(e.amount)
-      else cur.withdrawals += Number(e.amount)
+      if (e.direction === "deposit") cur.deposits += e.amount
+      else cur.withdrawals += e.amount
       byMonth.set(m, cur)
     }
     for (const [month, vals] of [...byMonth.entries()].sort((a, b) =>
@@ -369,73 +368,66 @@ export default async function SavingsPage({
           ) : (
             <Card className="py-2">
               <CardContent className="divide-y px-4">
-                {periodEntries.map((e) => {
-                  const acc = e.savings_accounts as
-                    | { name: string; color: string }
-                    | null
-                    | undefined
-                  return (
-                    <div key={e.id} className="flex items-center gap-3 py-3">
-                      <span
-                        className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
-                          e.direction === "deposit"
-                            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                            : "bg-red-500/10 text-red-600 dark:text-red-400"
-                        }`}
-                      >
-                        {e.direction === "deposit" ? (
-                          <ArrowDownToLine className="size-4" />
-                        ) : (
-                          <ArrowUpFromLine className="size-4" />
-                        )}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">
-                          {e.description ||
-                            (e.direction === "deposit"
-                              ? t("deposit")
-                              : t("withdrawal"))}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {formatDate(e.date, locale)}
-                          {!selectedAccountId && acc ? (
-                            <>
-                              {" · "}
-                              <span
-                                className="inline-block size-1.5 rounded-full align-middle"
-                                style={{ backgroundColor: acc.color }}
-                              />
-                              {" "}
-                              {acc.name}
-                            </>
-                          ) : null}
-                        </p>
-                      </div>
-                      <span
-                        className={`shrink-0 text-sm font-semibold tabular-nums ${
-                          e.direction === "deposit"
-                            ? "text-emerald-600 dark:text-emerald-400"
-                            : "text-red-600 dark:text-red-400"
-                        }`}
-                      >
-                        {e.direction === "deposit" ? "+" : "−"}
-                        {formatCurrency(Number(e.amount), locale)}
-                      </span>
-                      <div className="flex shrink-0 gap-0.5">
-                        <SavingsDialog
-                          accounts={accounts}
-                          accountId={e.account_id ?? undefined}
-                          entry={e}
-                        />
-                        <DeleteButton
-                          action={deleteSavingsEntry.bind(null, e.id)}
-                          title={t("deleteTitle")}
-                          description={t("deleteDescription")}
-                        />
-                      </div>
+                {periodEntries.map((e) => (
+                  <div key={e.id} className="flex items-center gap-3 py-3">
+                    <span
+                      className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
+                        e.direction === "deposit"
+                          ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                          : "bg-red-500/10 text-red-600 dark:text-red-400"
+                      }`}
+                    >
+                      {e.direction === "deposit" ? (
+                        <ArrowDownToLine className="size-4" />
+                      ) : (
+                        <ArrowUpFromLine className="size-4" />
+                      )}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">
+                        {e.description ||
+                          (e.direction === "deposit"
+                            ? t("deposit")
+                            : t("withdrawal"))}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatDate(e.date, locale)}
+                        {!selectedAccountId && e.account ? (
+                          <>
+                            {" · "}
+                            <span
+                              className="inline-block size-1.5 rounded-full align-middle"
+                              style={{ backgroundColor: e.account.color }}
+                            />{" "}
+                            {e.account.name}
+                          </>
+                        ) : null}
+                      </p>
                     </div>
-                  )
-                })}
+                    <span
+                      className={`shrink-0 text-sm font-semibold tabular-nums ${
+                        e.direction === "deposit"
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : "text-red-600 dark:text-red-400"
+                      }`}
+                    >
+                      {e.direction === "deposit" ? "+" : "−"}
+                      {formatCurrency(e.amount, locale)}
+                    </span>
+                    <div className="flex shrink-0 gap-0.5">
+                      <SavingsDialog
+                        accounts={accounts}
+                        accountId={e.accountId ?? undefined}
+                        entry={e}
+                      />
+                      <DeleteButton
+                        action={deleteSavingsEntry.bind(null, e.id)}
+                        title={t("deleteTitle")}
+                        description={t("deleteDescription")}
+                      />
+                    </div>
+                  </div>
+                ))}
               </CardContent>
             </Card>
           )}

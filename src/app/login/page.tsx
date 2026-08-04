@@ -5,7 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
-import { createClient } from "@/lib/supabase/client"
+import { signIn } from "@/lib/auth-client"
 import { LogoMark } from "@/components/logo"
 import { Button } from "@/components/ui/button"
 import {
@@ -29,9 +29,8 @@ export default function LoginPage() {
     e.preventDefault()
     setLoading(true)
     const formData = new FormData(e.currentTarget)
-    const supabase = createClient()
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { error } = await signIn.email({
       email: formData.get("email") as string,
       password: formData.get("password") as string,
     })
@@ -39,11 +38,11 @@ export default function LoginPage() {
     if (error) {
       setLoading(false)
       toast.error(
-        error.message === "Invalid login credentials"
+        error.code === "INVALID_EMAIL_OR_PASSWORD"
           ? t("errorInvalidCredentials")
-          : error.message === "Email not confirmed"
+          : error.code === "EMAIL_NOT_VERIFIED"
             ? t("errorEmailNotConfirmed")
-            : error.message
+            : (error.message ?? t("errorInvalidCredentials"))
       )
       return
     }
