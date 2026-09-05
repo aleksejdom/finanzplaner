@@ -109,6 +109,30 @@ export const transactions = pgTable("transactions", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 })
 
+// Merkt sich, für welchen Monat eine wiederkehrende Vorlage bewusst
+// übersprungen wurde (z. B. weil die Buchung für diesen Monat gelöscht
+// wurde) – verhindert, dass processRecurringTransactions sie neu erzeugt.
+export const recurringExclusions = pgTable(
+  "recurring_exclusions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    templateId: uuid("template_id")
+      .notNull()
+      .references(() => transactions.id, { onDelete: "cascade" }),
+    month: text("month").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("recurring_exclusions_template_month_idx").on(
+      t.templateId,
+      t.month
+    ),
+  ]
+)
+
 export const savingsGoals = pgTable("savings_goals", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: text("user_id")

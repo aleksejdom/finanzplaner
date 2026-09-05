@@ -8,6 +8,7 @@ import { getTranslations } from "next-intl/server"
 import { db } from "@/db"
 import {
   categories,
+  recurringExclusions,
   savingsAccounts,
   savingsEntries,
   savingsGoals,
@@ -143,6 +144,20 @@ export async function deleteTransaction(id: string): Promise<ActionResult> {
     await db
       .delete(transactions)
       .where(and(eq(transactions.id, id), eq(transactions.userId, userId)))
+
+    // Wenn eine vom Wiederholungs-Mechanismus erzeugte Buchung gelöscht wird,
+    // merken wir uns das für diesen Monat – sonst würde sie beim nächsten
+    // Seitenaufruf durch processRecurringTransactions neu angelegt.
+    if (previous?.recurringSourceId) {
+      await db
+        .insert(recurringExclusions)
+        .values({
+          userId,
+          templateId: previous.recurringSourceId,
+          month: String(previous.date).slice(0, 7),
+        })
+        .onConflictDoNothing()
+    }
 
     if (previous) {
       await logActivity(userId, "deleted", "transaction", {

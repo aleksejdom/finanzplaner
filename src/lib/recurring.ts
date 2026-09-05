@@ -1,6 +1,6 @@
 import { and, eq, gte, lt } from "drizzle-orm"
 import { db } from "@/db"
-import { transactions } from "@/db/schema"
+import { recurringExclusions, transactions } from "@/db/schema"
 
 function toDateOnly(d: Date) {
   return d.toISOString().slice(0, 10)
@@ -19,6 +19,8 @@ export async function processRecurringTransactions(userId: string) {
   const firstOfNextMonth = new Date(year, month, 1)
   const daysInMonth = new Date(year, month, 0).getDate()
 
+  const monthKey = `${year}-${String(month).padStart(2, "0")}`
+
   const templates = await db
     .select()
     .from(transactions)
@@ -27,6 +29,19 @@ export async function processRecurringTransactions(userId: string) {
     )
 
   for (const template of templates) {
+    const excluded = await db
+      .select({ id: recurringExclusions.id })
+      .from(recurringExclusions)
+      .where(
+        and(
+          eq(recurringExclusions.templateId, template.id),
+          eq(recurringExclusions.month, monthKey)
+        )
+      )
+      .limit(1)
+
+    if (excluded.length > 0) continue
+
     const existing = await db
       .select({ id: transactions.id })
       .from(transactions)
