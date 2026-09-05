@@ -47,7 +47,7 @@ docker compose up -d --build
 
 `docker-compose.yml` baut das Next.js-Standalone-Image (`output: "standalone"` in `next.config.ts`) und liest die Laufzeit-Konfiguration aus `.env.local`. Die PostgreSQL-Datenbank läuft extern (z. B. als eigener Dienst auf demselben Coolify-/Docker-Host) – die App verbindet sich ausschließlich über `DATABASE_URL`.
 
-Beim ersten Deployment auf einem neuen Server/einer neuen DB einmalig die Migrationen anwenden:
+Der Container wendet beim Start automatisch alle offenen Migrationen aus `drizzle/` an (`scripts/migrate.cjs`, per `CMD` vor `node server.js`) – kein manuelles `db:migrate` mehr nötig, auch nicht beim ersten Deployment. Das Skript ist idempotent (nutzt dieselbe Tracking-Tabelle `drizzle."__drizzle_migrations"` wie `drizzle-kit migrate`) und kann bei Bedarf trotzdem manuell ausgeführt werden:
 
 ```bash
 DATABASE_URL=... npm run db:migrate
